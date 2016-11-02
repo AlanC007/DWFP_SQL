@@ -1,0 +1,121 @@
+-- ================================================
+-- Template generated from Template Explorer using:
+-- Create Procedure (New Menu).SQL
+--
+-- Use the Specify Values for Template Parameters 
+-- command (Ctrl-Shift-M) to fill in the parameter 
+-- values below.
+--
+-- This block of comments will not be included in
+-- the definition of the procedure.
+-- ================================================
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Author:		Alan Cannon
+-- Create date: 23-08-2013
+-- Description:	
+-- This Procedure will Check all Alternate Systems For Order Existance and Place these Orders in tblAltOrders for Use in Queries
+-- =============================================
+CREATE PROCEDURE usp_CheckAltSourcesForOrders
+	-- Inputs
+	-- Outputs
+	@intResultCode	int output,	-- Integer result code.  1=Success.
+	@strResultText	varchar(256) output  -- Textual description of any failure.  ''=Success.
+AS
+	-- Create Local Variables
+	Declare @AltSystemsCount int, @i int, @j int
+	--Declare @AltSysDataSource nvarchar(25), @ExistenceCheck nvarchar(100),@DatasourceValue nvarchar(100), @OPENQUERY nvarchar(max), @SQLSTRING nvarchar(max)
+
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	set nocount on
+
+	-- Initialize results to indicate no result
+	set @intResultCode = 0
+	set @strResultText = ''
+	Set @i = 1
+
+	-- Find Out How Many System to Query Against
+	Set @AltSystemsCount =(Select Value from [wip].[dbo].[tblWIPDBConfig] Where Name = 'AltSystemsNum')
+
+	If @AltSystemsCount = 0
+		Begin
+			set @intResultCode = 9
+			set @strResultText = 'No Alternate Systems Configured to Query Check your Entry and Attempt Again'
+		End
+	-- Begin the Alternate System Queries with a Result in Count > 0
+	If @AltSystemsCount > 0 
+		Begin Try 
+			-- Next We Fill Out the Alternate System Datasource To Query
+			Create Table #AltSystemsData (ID int,DataSource nvarchar(25))
+				While @i >  @AltSystemsCount
+					Begin 
+						Insert into #AltSystemsData Select @i,Value from [wip].[dbo].[tblWIPDBConfig] Where Name = 'AltSys_'+@i
+						Set @i = @i +1
+					End  
+			Create Table #LocalOrders (SalesOrder int,PatientId Nvarchar(20),AssignedLine int)
+				-- First Lets Gather all Current Orders
+				Insert into #LocalOrders Select Distinct(SalesOrder) from [WIP].[dbo].[tblOrder]
+				--Lets Begin Our Alternate SystemS Query by Checking if they Are Active or Not
+				begin transaction
+					While @j > @AltSystemsCount
+						Begin 
+							Declare @AltSysDataSource nvarchar(25), @ExistenceCheck nvarchar(100), @DatasourceValue nvarchar(100), @OPENQUERY nvarchar(max), @SQLSTRING nvarchar(max), @ParmDefinition nvarchar(100)
+							SET @ParmDefinition = N'@ExistenceCheck nvarchar(max) OUTPUT'
+							--Set @AltSysDataSource = (Select DataSource from #AltSystemsData Where ID = @j)
+							Set @AltSysDataSource = '172.16.16.14'
+							Set @DatasourceValue = '''SQLNCLI'''
+							Set @DatasourceValue =  @DatasourceValue + ',''DataSource='+@AltSysDataSource+''
+							Set @DatasourceValue =  @DatasourceValue + '; Connect Timeout=2; User ID=Pkg; Password=me!;'''
+							Set @OPENQUERY = 'Set @ExistenceCheck =  (Select Value FROM OPENDATASOURCE('+@DatasourceValue+').[WIP].[dbo].[tblWIPDBConfig] Where name = ''LabelAndLitPath'')'
+							Set @SQLSTRING =  @OPENQUERY
+							Select @SQLSTRING
+							EXECUTE sp_executesql @SQLString,@ParmDefinition,@ExistenceCheck = @ExistenceCheck OUTPUT
+							Select @ExistenceCheck
+							IF @ExistenceCheck <> ''
+								Begin
+									Insert into [WIP].[dbo].[tblAltSystemsOrders] (UID,SalesOrder,PatientID,Line)
+									select SalesOrder,PatientID,AssignedLine from OPENDATASOURCE('SQLNCLI','Data Source='+@AltSysDataSource+'; User ID=pkg; Password=me!;connect timeout=2').WIP.dbo.tblOrder o where o.SalesOrder in (Select SalesOrder from #LocalOrders)
+								END
+							Set @ExistenceCheck = ''
+							Set @j = @j +1
+						End
+
+					set @intResultCode = 1
+					set @strResultText = 'Sucessfully Gathered Alternate Systems Order Data'
+				commit transaction
+			--Delete Temp Tables
+			Drop Table #AltSystemsData
+			Drop Table #LocalOrders
+		end try
+
+--Catch Any Transactionional Errors here
+	begin catch
+		-- Set return values
+		select @intResultCode=error_number(), @strResultText=error_message()
+
+		-- Prior to logging message we need to roll back any started 
+		-- transactions
+		if (xact_state()) <> 0
+			rollback transaction
+
+		-- Insert message into the message log
+	    insert into tblMessageLog
+			(MsgDate, 
+			 MsgNumber, 
+			 MsgText, 
+			 MsgSeverity, 
+			 MsgProcedure)
+			values
+			(getdate(),
+			 error_number(),
+			 error_message(),
+			 error_severity(),
+			 error_procedure())
+
+	end catch
+end

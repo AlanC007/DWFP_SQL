@@ -1,0 +1,52 @@
+USE [INTRALOX_SF_MM]
+GO
+declare @Connection nvarchar(255)
+Set @Connection = '''Provider=Microsoft.ACE.OLEDB.12.0'''
+
+Declare @err int, @oFS int,@oFol int,@oFC int, @oFil int,@RetCode int
+declare @Source nvarchar(max),@Dest nvarchar(max)
+SEt @Source = '\\prod\root\V_Drive\Team\Intralox HMI Data\Prpt 0714.xlsx'
+SET @Dest = 'C:\to_import\Part numbers\Prpt 0714.xlsx'
+
+Exec @RetCode = sp_oaCreate'Scripting.FileSystemObject',@oFS output
+Exec @RetCode = sp_oaMethod @oFs,'MoveFile',NULL,@Source, @Dest
+
+Select @RetCode
+
+exec @err = xp_cmdshell'move ''\\prod\root\V_Drive\Team\Intralox HMI Data\Prpt 0714.xlsx C:\to_import\Part numbers\Prpt 0714.xlsx''
+select * from openrowset('Microsoft.ACE.OLEDB.12.0','EXCEL 12.0 Xml;HDR=YES;Database=C:\to_import\Part numbers\Prpt 0714.xlsx',
+'Select * from [Sheet1$]')
+
+
+select * from openrowset('Microsoft.ACE.OLEDB.12.0','EXCEL 12.0 Xml;HDR=YES;Database=\\prod\root\V_Drive\Team\Intralox HMI Data\Prpt 0714.xlsx',
+'Select * from [Sheet1$]')
+
+--Returns non matching records from the Part number data import
+Create table #Temp ([Pnum] nvarchar(60),[pDesc] nvarchar(max),[pQTY] int,[pWeight] float)
+
+insert into #temp
+SELECT [Part Number]
+      ,[Part Description]
+	  ,[Box Qty]
+	  ,[Part Weight]
+  FROM [dbo].[Sheet1$] A LEFT join INTRALOX_SF.dbo.tblParts B ON A.[Part Number]=B.pNum
+WHERE B.pNum IS NULL
+
+--Create our local table from this new data set if records exist
+if @@RowCount <>0
+	Begin
+		Create table tblPartsToImport 
+		([pNum] nvarchar(50)
+		,[pDesc] nvarchar(max)
+		,[pPerBox] int
+		,[pWeight] float
+		)
+	Insert into tblPartsToImport Select * from #temp
+	End
+
+Drop table #temp
+go
+
+
+
+
